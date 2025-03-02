@@ -27,7 +27,7 @@
 
 //Блок определения констант для белого шума 
 #define MU 0
-#define SIGMA 0.1
+#define SIGMA 0.001
 
 // Определяем константы для формулы Гельмерта (GRS80/WGS84)
 #define G_0 9.78030  // Ускорение свободного падения на экваторе (м/с^2)
@@ -108,8 +108,8 @@ void reproject_vector(double heading, double gamma, double theta, double F_x[3],
 };
 
 
-// Функция для инициализации данных эксперимента
-void initialize_data(DataPoint *data, int size, double start_heading_value, double stop_heading_value) {
+// Функция для инициализации данных эксперимента (для генерации сигмоидой добавить - double start_heading_value)
+void initialize_data(DataPoint *data, int size, double stop_heading_value) {
     double g_0 = gravity_helmert(PHI, HEIGHT);
 
     double F_x[3] = {g_E, g_N, g_UP- g_0};
@@ -289,46 +289,55 @@ void process_data(const char* file1, const char* file2) {
     double diff_fz1 = avg2_fz1 - avg1_fz1;
     double diff_fz2 = avg2_fz2 - avg1_fz2;
     double diff_fz3 = avg2_fz3 - avg1_fz3;
-
+    // получили первую дельту
 
     //  Вывод результатов
+    printf("---------------------------------------------\n");
     printf("Осреднённые значения сил для %s: F_z1=%.3f, F_z2=%.3f, F_z3=%.3f\n", file1, avg1_fz1, avg1_fz2, avg1_fz3);
     printf("Осреднённые значения сил для %s: F_z1=%.3f, F_z2=%.3f, F_z3=%.3f\n", file2, avg2_fz1, avg2_fz2, avg2_fz3);
     printf("Разница между ними: F_z1=%.5f, F_z2=%.5f, F_z3=%.5f\n", diff_fz1, diff_fz2, diff_fz3);
 
-    double matrix[2][2] = { {cos(D2R(DELTA_KSI))-1, -sin(D2R(DELTA_KSI)) },
+    //  Матрица A(\ksi)
+    double matrix_A_s_si[2][2] = { {cos(D2R(DELTA_KSI))-1, -sin(D2R(DELTA_KSI)) },
                             {sin(D2R(DELTA_KSI)), cos(D2R(DELTA_KSI))-1}};
 
-    double inverse[2][2];
+    //  Матрица A^(-1)(\ksi)
+    double inverse_matrix_A_s_si[2][2];
 
+    //  Вектор g_x_0
     double F_x_0[3] = {0, 0, G_0};
     double F_s_0[3] = {0, 0, 0};
     double F_z_0[3] = {0, 0, 0};
 
-    reproject_vector(D2R(DELTA_KSI), 0, 0, F_x_0, F_s_0);
-    F_z_0[0] = F_s_0[0]*matrix[0][0] + F_s_0[1]*matrix[0][1];
-    F_z_0[1] = F_s_0[0]*matrix[1][0] + F_s_0[1]*matrix[1][1];
+    //  Перепроектировка g_x_0 в g_s_0 помощью A_s_x(\psi,\gamma,\theta)
+    reproject_vector(data1[0].heading, 0, 0, F_x_0, F_s_0);
+    F_z_0[0] = F_s_0[0]*matrix_A_s_si[0][0] + F_s_0[1]*matrix_A_s_si[0][1];
+    F_z_0[1] = F_s_0[0]*matrix_A_s_si[1][0] + F_s_0[1]*matrix_A_s_si[1][1];
 
+    // получили \delta(\delta F_z)
     double Diff_f_z[2] = {0,0};
     Diff_f_z[0] = diff_fz1 - F_z_0[0];
     Diff_f_z[1] = diff_fz2 - F_z_0[1];
 
+    // умножаем на обратную матрицу A^-1(\ksi)
+    invert_2x2_matrix(matrix_A_s_si, inverse_matrix_A_s_si);
+    double g_E_1 = inverse_matrix_A_s_si[0][0] * Diff_f_z[0] + inverse_matrix_A_s_si[0][1] * Diff_f_z[1];
+    double g_N_2 = inverse_matrix_A_s_si[1][0] * Diff_f_z[0] + inverse_matrix_A_s_si[1][1] * Diff_f_z[1];
 
-    invert_2x2_matrix(matrix, inverse);
-    double g_E_1 = inverse[0][0] * Diff_f_z[0] + inverse[0][1] * Diff_f_z[1];
-    double g_N_2 = inverse[1][0] * Diff_f_z[0] + inverse[1][1] * Diff_f_z[1];
-
-    double matrix_1[3][3] = { {cos(D2R(DELTA_KSI)), -sin(D2R(DELTA_KSI)), 0 },
-                            {sin(D2R(DELTA_KSI)), cos(D2R(DELTA_KSI)), 0},
+    // нужна матрица A_s_x^0(\ksi, \gamma, \theta)
+    double matrix_A_s_x[3][3] = { {cos(data1[0].heading), -sin(data1[0].heading), 0 },
+                            {sin(data1[0].heading), cos(data1[0].heading), 0},
                             {0, 0, 1}};
 
-    double inverse_1[3][3];
-    invert_3x3_matrix(matrix_1, inverse_1);
+    double inverse_matrix_A_s_x[3][3]; // обращаем матрицу A_s_x^0
+    invert_3x3_matrix(matrix_A_s_x, inverse_matrix_A_s_x);
 
-    double g_E_exp = inverse_1[0][0] * g_E_1 + inverse_1[0][1] * g_N_2;
-    double g_N_exp = inverse_1[1][0] * g_E_1 + inverse_1[1][1] * g_N_2;
+
+    double g_E_exp = inverse_matrix_A_s_x[0][0] * g_E_1 + inverse_matrix_A_s_x[0][1] * g_N_2;
+    double g_N_exp = inverse_matrix_A_s_x[1][0] * g_E_1 + inverse_matrix_A_s_x[1][1] * g_N_2;
 
     printf("Экспериментальные значения сил: g_E_exp=%.5f, g_N_exp=%.5f g_E=%.5f g_N=%.5f\n", g_E_exp, g_N_exp, g_E, g_N);
+    printf("Ошибка получается : D_g_E =%.5f, D_g_N =%.5f\n", g_E_exp - g_E, g_N_exp - g_N);
 }
 
 int main() {
@@ -343,7 +352,7 @@ int main() {
     reproject_vector(0, 0, 0, F_x, F_z);
     
     for (int exp = 0; exp < NUM_EXPERIMENTS; exp++) {
-        initialize_data(data, DATA_POINTS, exp*45.0, (exp+1)*45);
+        initialize_data(data, DATA_POINTS, (exp+1)*45.0);
         generate_white_noise(data, DATA_POINTS);
         
         snprintf(filename, sizeof(filename), "experiment_%d.txt", exp + 1);
@@ -357,6 +366,11 @@ int main() {
     // }
 
     process_data("experiment_1.txt", "experiment_2.txt");
+    process_data("experiment_2.txt", "experiment_3.txt");
+    process_data("experiment_3.txt", "experiment_4.txt");
+    process_data("experiment_4.txt", "experiment_5.txt");
+    process_data("experiment_5.txt", "experiment_6.txt");
+    process_data("experiment_6.txt", "experiment_7.txt");
     
     
     return 0;
