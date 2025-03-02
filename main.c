@@ -3,7 +3,7 @@
 #include <time.h>
 #include <math.h>
 
-#define NUM_EXPERIMENTS 7
+#define NUM_EXPERIMENTS 4
 #define DATA_POINTS 1000 // Количество точек данных в одном эксперименте
 #define TIME_START 0.0
 #define TIME_STOP 1000.0
@@ -11,6 +11,7 @@
 
 #define RadianToDegree  (180./M_PI)                         // Radians  --> Degree
 #define D2R(Degrees)    ((Degrees)/RadianToDegree)          // Degree  --> Radians
+#define RAD_TO_ARCSEC(RAD)  (RAD*206265)                    // Radians --> Arcseconds
 
 // Блок определения места проведения эксперимента 
 
@@ -23,11 +24,11 @@
 #define g_E  4e-4 // не очень понимаю какие начальные значения положить
 #define g_N  5e-4 // делаем из расчета 10 угловых секунд = 4.848*10^(-5) рад , а \delta(g) = g_0*(отклонение в радианах)
 #define g_UP 0.0
-#define DELTA_KSI 45
+#define DELTA_KSI 90
 
 //Блок определения констант для белого шума 
 #define MU 0
-#define SIGMA 0.001
+#define SIGMA 0.0001
 
 // Определяем константы для формулы Гельмерта (GRS80/WGS84)
 #define G_0 9.78030  // Ускорение свободного падения на экваторе (м/с^2)
@@ -266,9 +267,16 @@ int invert_3x3_matrix(double matrix[3][3], double inverse[3][3]) {
 }
 
 //  Основная функция для обработки данных
-void process_data(const char* file1, const char* file2) {
+void process_data(const char* file1, const char* file2, const char* file3) {
     DataPoint data1[DATA_POINTS], data2[DATA_POINTS];
-    
+    FILE *file = fopen(file3, "w");
+
+
+    if (!file) {
+        perror("Ошибка при открытии файла");
+        return;
+    }
+
     // Чтение данных из первого файла
     int count1 = read_data(file1, data1);
     if (count1 < 3) return;
@@ -301,8 +309,30 @@ void process_data(const char* file1, const char* file2) {
     double matrix_A_s_si[2][2] = { {cos(D2R(DELTA_KSI))-1, -sin(D2R(DELTA_KSI)) },
                             {sin(D2R(DELTA_KSI)), cos(D2R(DELTA_KSI))-1}};
 
+                
     //  Матрица A^(-1)(\ksi)
     double inverse_matrix_A_s_si[2][2];
+
+    invert_2x2_matrix(matrix_A_s_si, inverse_matrix_A_s_si);
+
+    // Выведем матрицы в файл 
+    fprintf(file, "Матрица A_s_si:\n");
+    for (int i = 0; i < 2; i++) {
+        for (int j = 0; j < 2; j++) {
+            fprintf(file, "%.5f ", matrix_A_s_si[i][j]);
+        }
+        fprintf(file, "\n");
+    }
+
+    fprintf(file, "------------------------\n");
+    fprintf(file, "Матрица A_s_si^(-1):\n");
+    for (int i = 0; i < 2; i++) {
+        for (int j = 0; j < 2; j++) {
+            fprintf(file, "%.5f ", inverse_matrix_A_s_si[i][j]);
+        }
+        fprintf(file, "\n");
+    }
+    fprintf(file, "------------------------\n");
 
     //  Вектор g_x_0
     double F_x_0[3] = {0, 0, G_0};
@@ -320,7 +350,7 @@ void process_data(const char* file1, const char* file2) {
     Diff_f_z[1] = diff_fz2 - F_z_0[1];
 
     // умножаем на обратную матрицу A^-1(\ksi)
-    invert_2x2_matrix(matrix_A_s_si, inverse_matrix_A_s_si);
+    // invert_2x2_matrix(matrix_A_s_si, inverse_matrix_A_s_si);
     double g_E_1 = inverse_matrix_A_s_si[0][0] * Diff_f_z[0] + inverse_matrix_A_s_si[0][1] * Diff_f_z[1];
     double g_N_2 = inverse_matrix_A_s_si[1][0] * Diff_f_z[0] + inverse_matrix_A_s_si[1][1] * Diff_f_z[1];
 
@@ -332,27 +362,53 @@ void process_data(const char* file1, const char* file2) {
     double inverse_matrix_A_s_x[3][3]; // обращаем матрицу A_s_x^0
     invert_3x3_matrix(matrix_A_s_x, inverse_matrix_A_s_x);
 
+    // Выведем матрицы в файл A_s_x
+    fprintf(file, "Матрица A_s_x:\n");
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            fprintf(file, "%.5f ", matrix_A_s_x[i][j]);
+        }
+        fprintf(file, "\n");
+    }
+    fprintf(file, "------------------------\n");
+    fprintf(file, "Матрица A_s_x^(-1):\n");
+
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            fprintf(file, "%.5f ", inverse_matrix_A_s_x[i][j]);
+        }
+        fprintf(file, "\n");
+    }
+    fprintf(file, "------------------------\n");
+
 
     double g_E_exp = inverse_matrix_A_s_x[0][0] * g_E_1 + inverse_matrix_A_s_x[0][1] * g_N_2;
     double g_N_exp = inverse_matrix_A_s_x[1][0] * g_E_1 + inverse_matrix_A_s_x[1][1] * g_N_2;
 
     printf("Экспериментальные значения сил: g_E_exp=%.5f, g_N_exp=%.5f g_E=%.5f g_N=%.5f\n", g_E_exp, g_N_exp, g_E, g_N);
-    printf("Ошибка получается : D_g_E =%.5f, D_g_N =%.5f\n", g_E_exp - g_E, g_N_exp - g_N);
+    printf("В угловых секундах: g_E_exp=%.3f, g_E=%.3f g_N_exp=%.3f g_N=%.3f\n", RAD_TO_ARCSEC(g_E_exp/G_0), RAD_TO_ARCSEC(g_E/G_0) , RAD_TO_ARCSEC(g_N_exp/G_0), RAD_TO_ARCSEC(g_N/G_0));
+    printf("Ошибка в угловых секундах: D_g_E=%.3f, D_g_N=%.3f\n", RAD_TO_ARCSEC(g_E_exp/G_0) - RAD_TO_ARCSEC(g_E/G_0) , RAD_TO_ARCSEC(g_N_exp/G_0) - RAD_TO_ARCSEC(g_N/G_0));
 }
 
 int main() {
     srand(time(NULL)); // Инициализация генератора случайных чисел
     
     char filename[20];
-    DataPoint data[DATA_POINTS];
 
     double F_x[3] = {0, 0, -10};
     double F_z[3] = {0, 0, 0};
 
     reproject_vector(0, 0, 0, F_x, F_z);
-    
+
+    // Динамическое выделение памяти для данных
+    DataPoint* data = (DataPoint*)malloc(DATA_POINTS * sizeof(DataPoint));
+    if (!data) {
+        printf("Ошибка выделения памяти для данных.\n");
+        return -1;
+    }
+
     for (int exp = 0; exp < NUM_EXPERIMENTS; exp++) {
-        initialize_data(data, DATA_POINTS, (exp+1)*45.0);
+        initialize_data(data, DATA_POINTS, (exp + 1) * DELTA_KSI);
         generate_white_noise(data, DATA_POINTS);
         
         snprintf(filename, sizeof(filename), "experiment_%d.txt", exp + 1);
@@ -360,18 +416,19 @@ int main() {
         
         printf("Данные эксперимента %d записаны в %s\n", exp + 1, filename);
     }
-    // for (size_t i = 0; i < 1000; i++)
-    // {
-    //     printf("%lf\n", sigmoid(i, 0, 45, 0, 1000));
-    // }
 
-    process_data("experiment_1.txt", "experiment_2.txt");
-    process_data("experiment_2.txt", "experiment_3.txt");
-    process_data("experiment_3.txt", "experiment_4.txt");
-    process_data("experiment_4.txt", "experiment_5.txt");
-    process_data("experiment_5.txt", "experiment_6.txt");
-    process_data("experiment_6.txt", "experiment_7.txt");
-    
+    printf("Данные для эксперимента сгенерированы с Mu = %d, Sigma = %lf\n", MU, SIGMA);
+    printf("-------------------------------------------------------------\n");
+
+    process_data("experiment_1.txt", "experiment_2.txt", "experiment_1_set.txt");
+    process_data("experiment_2.txt", "experiment_3.txt", "experiment_2_set.txt");
+    process_data("experiment_3.txt", "experiment_4.txt", "experiment_3_set.txt");
+    // process_data("experiment_4.txt", "experiment_5.txt", "experiment_4_set.txt");
+    // process_data("experiment_5.txt", "experiment_6.txt", "experiment_5_set.txt");
+    // process_data("experiment_6.txt", "experiment_7.txt", "experiment_6_set.txt");
+
+    // Освобождение динамической памяти
+    free(data);
     
     return 0;
 }
